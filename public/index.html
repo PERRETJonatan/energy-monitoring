@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meter Data Visualization</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <h1>Meter Data</h1>
+    <label for="fromDate">From:</label>
+    <input type="text" id="fromDate" placeholder="Select From Date" />
+    <label for="toDate">To:</label>
+    <input type="text" id="toDate" placeholder="Select To Date" />
+    <button onclick="fetchData()">Update Chart</button>
+    <canvas id="meterDataChart"></canvas>
+    <script>
+      const today = new Date();
+      today.setHours(0, 0, 0, 0); // Set to today at midnight
+      const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000); // Set to yesterday at midnight
+
+      flatpickr("#fromDate", {
+        enableTime: true,
+        dateFormat: "Y-m-d H:i",
+        defaultDate: yesterday,
+      });
+      flatpickr("#toDate", {
+        enableTime: true,
+        dateFormat: "Y-m-d H:i",
+        defaultDate: today,
+      });
+
+      const ctx = document.getElementById("meterDataChart").getContext("2d");
+      const meterDataChart = new Chart(ctx, {
+        type: "line", // Chart type
+        data: {
+          labels: [], // We will populate this array with time values
+          datasets: [
+            {
+              label: "Meter Readings",
+              backgroundColor: "rgba(255, 99, 132, 0.2)",
+              borderColor: "rgba(255, 99, 132, 1)",
+              data: [], // We will populate this array with data values
+            },
+          ],
+        },
+        options: {
+          scales: {
+            y: {
+              beginAtZero: true,
+            },
+          },
+        },
+      });
+
+      window.onload = function () {
+        fetchData();
+      };
+
+      async function fetchData() {
+        const fromDate = document.getElementById("fromDate").value;
+        const toDate = document.getElementById("toDate").value;
+        if (!fromDate || !toDate) {
+          alert("Please select both from and to dates.");
+          return;
+        }
+
+        const url = `/meter-data?from=${encodeURIComponent(
+          fromDate
+        )}&to=${encodeURIComponent(toDate)}`;
+        try {
+          const response = await fetch(url);
+          const data = await response.json();
+          meterDataChart.data.labels = data.map((item) =>
+            new Date(item.x).toLocaleTimeString()
+          );
+          meterDataChart.data.datasets[0].data = data.map(
+            (item) => item.y
+          );
+          meterDataChart.update();
+        } catch (error) {
+          console.error("Error fetching data:", error);
+        }
+      }
+    </script>
+  </body>
+</html>
