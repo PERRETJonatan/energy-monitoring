@@ -32,6 +32,7 @@ async function automatedLogin() {
   const token = url.match(/token=([^&]*)/)[1];
   const expires_in = url.match(/expires_in=([^&]*)/)[1];
 
+  console.log("Token: " + token);
   await browser.close();
 
   tokenExpires = Date.now() + parseInt(expires_in) * 1000; // Update expiration time
@@ -61,6 +62,37 @@ app.get("/meter-data", async (req, res) => {
     const data = await fetchMeterData(token, from, to);
 
     res.json(data);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch data" });
+  }
+});
+
+app.get("/meter-sum", async (req, res) => {
+  const { from, to } = req.query;
+
+  if (!from || !to) {
+    return res
+      .status(400)
+      .json({ error: "Please provide both from and to dates." });
+  }
+
+  if (!token || Date.now() >= tokenExpires) {
+    try {
+      const auth = await automatedLogin();
+      token = auth.token;
+    } catch (error) {
+      console.error(error);
+      return res.status(403).json({ error: "Failed to authenticate" });
+    }
+  }
+
+  try {
+    const data = await fetchMeterData(token, from, to);
+
+    const sum = data.reduce((acc, item) => acc + item.y, 0);
+
+    res.json(sum);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to fetch data" });
