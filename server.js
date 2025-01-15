@@ -1,5 +1,6 @@
 const puppeteer = require("puppeteer");
 const express = require("express");
+const cron = require("node-cron");
 const app = express();
 app.use(express.static("public"));
 require("dotenv").config();
@@ -12,6 +13,73 @@ let fetch;
 
 let token = "";
 let tokenExpires = 0;
+
+// Fetch meter data every day at 00:15
+cron.schedule("15 0 * * *", async () => {
+// Every 10 seconds (for testing)
+//cron.schedule("*/10 * * * * *", async () => {
+  console.log("Fetching meter data...");
+
+  // Correctly setting the 'yesterday' date
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  yesterday.setHours(0, 0, 0, 0);
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  console.log("Yesterday: " + yesterday);
+  console.log("Today: " + today);
+
+  try {
+    if (!token || Date.now() >= tokenExpires) {
+      try {
+        const auth = await automatedLogin();
+        token = auth.token;
+      } catch (error) {
+        console.error(error);
+        return res.status(403).json({ error: "Failed to authenticate" });
+      }
+    }
+    // Assuming fetchMeterData is defined and token is available
+    const data = await fetchMeterData(token, yesterday, today);
+    //console.log(data);
+
+    // store the sum of the data in a database
+    const sum = data.reduce((acc, item) => acc + item.y, 0);
+    console.log("Sum: " + sum);
+
+    // Write the sum and the date to InfluxDB
+    writeToInfluxDB(from, sum);
+  } catch (error) {
+    console.error("Failed to fetch meter data:", error);
+  }
+});
+
+// Configure your InfluxDB connection here
+const url = process.env.INFLUX_URL;
+const influxToken = process.env.INFLUX_TOKEN;
+const org = process.env.INFLUX_ORG;
+const bucket = process.env.INFLUX_BUCKET;
+const { InfluxDB, Point } = require("@influxdata/influxdb-client");
+const client = new InfluxDB({ url, token: influxToken });
+const writeApi = client.getWriteApi(org, bucket);
+
+// Function to write data to InfluxDB
+async function writeToInfluxDB(date, sum) {
+  const point = new Point("meter_sum")
+    .tag("unit", "energy")
+    .floatField("sum", sum)
+    .timestamp(date);
+
+  if (!writeApi) {
+    console.error("writeApi is not available");
+    return;
+  }
+
+  await writeApi.writePoint(point);
+  console.log(`Data written to InfluxDB: Sum ${sum} on ${date.toISOString()}`);
+}
 
 async function automatedLogin() {
   const browser = await puppeteer.launch({
@@ -32,7 +100,7 @@ async function automatedLogin() {
   const token = url.match(/token=([^&]*)/)[1];
   const expires_in = url.match(/expires_in=([^&]*)/)[1];
 
-  console.log("Token: " + token);
+  //console.log("Token: " + token);
   await browser.close();
 
   tokenExpires = Date.now() + parseInt(expires_in) * 1000; // Update expiration time
@@ -99,13 +167,62 @@ app.get("/meter-sum", async (req, res) => {
   }
 });
 
+app.get("/compute-all-meter-sum", async (req, res) => {
+  const daysToCompute = req.query.days || 1;
+
+  console.log("Fetching meter data...");
+
+  for (let i = 0; i < daysToCompute; i++) {
+    const to = new Date(new Date() - i * 24 * 60 * 60 * 1000);
+    to.setHours(23, 59, 0, 0);
+
+    const from = new Date(to);
+    from.setHours(0, 0, 0, 0);
+
+
+    console.log("From: " + from);
+    console.log("to: " + to);
+
+    try {
+      if (!token || Date.now() >= tokenExpires) {
+        try {
+          const auth = await automatedLogin();
+          token = auth.token;
+        } catch (error) {
+          console.error(error);
+          return res.status(403).json({ error: "Failed to authenticate" });
+        }
+      }
+      // Assuming fetchMeterData is defined and token is available
+      const data = await fetchMeterData(token, from, to);
+      //console.log(data);
+
+      // store the sum of the data in a database
+      const sum = data.reduce((acc, item) => acc + item.y, 0);
+      console.log("Sum: " + sum);
+
+      // Write the sum and the date to InfluxDB
+      await writeToInfluxDB(from, sum);
+    } catch (error) {
+      console.error("Failed to fetch meter data:", error);
+    }
+  }
+  res.status(200).json({ message: "Data computed and stored in InfluxDB" });
+});
+
+function toLocalISOString(date) {
+  const offset = date.getTimezoneOffset();
+  const adjustedDate = new Date(date.getTime() - offset * 60 * 1000);
+  return adjustedDate.toISOString().slice(0, -1); // Removing the 'Z' to not imply UTC
+}
+
 async function fetchMeterData(token, from, to) {
   const url =
     `https://backend.yverdon-energies.ch/ebp/meterdatavalues?meteringpoint=` +
     process.env.METERINGPOINT +
-    `&dateFrom=${new Date(from).toISOString()}&dateTo=${new Date(
+    `&dateFrom=${toLocalISOString(from)}&dateTo=${toLocalISOString(
       to
-    ).toISOString()}&intervall=0`;
+    )}&intervall=0`;
 
   console.log(url);
 
